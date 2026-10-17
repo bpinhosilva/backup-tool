@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# lbackup - Simple archive, encrypt, and restore script for Linux
+set -euo pipefail
+
+# ==============================================================================
+# DEFAULT EXCLUDES (Edit this list directly or pass -e / --exclude via CLI)
+# ==============================================================================
+DEFAULT_EXCLUDES=(
+  ".cache"
+  "Cache"
+  "Code Cache"
+  "cache2"
+  "tmp"
+  "temp"
+  "*.tmp"
+  "*.temp"
+  "*.swp"
+  "*~"
+  ".local/share/Trash"
+  ".Trash-*"
+  "node_modules"
+  "__pycache__"
+  ".pytest_cache"
+  ".venv"
+  "venv"
+  "lost+found"
+)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  lbackup backup  [-s SOURCE_DIR] [-o OUTPUT_PATH] [-p PASSWORD] [-e PATTERN ...] [--no-default-excludes] [--dry-run] [-v]
+  lbackup restore -i ARCHIVE_FILE [-o RESTORE_DIR] [-p PASSWORD] [-v]
+
+Commands:
+  backup    Archive, compress (tar.gz), and encrypt (AES-256) a directory
+  restore   Decrypt and extract an encrypted backup archive
+
+Backup Options:
+  -s, --source DIR          Directory to back up (default: $HOME)
+  -o, --output PATH         Output directory or .tar.gz.gpg file path (default: $HOME/backups)
+  -p, --password PASS       Encryption password (prompts interactively if omitted)
+  -e, --exclude PATTERN     Exclude directory/file pattern (can be used multiple times)
+      --no-default-excludes Do not use the default cache/temp exclude list
+  -n, --dry-run             Show estimated backup size in GB (after excludes) without backing up
+  -v, --verbose             Print each file path as it is backed up
+
+Restore Options:
+  -i, --input FILE          Encrypted .tar.gz.gpg file to restore (required)
+  -o, --output DIR          Directory to extract files into (default: ./restored)
+  -p, --password PASS       Decryption password (prompts interactively if omitted)
+  -v, --verbose             Print each file path as it is restored
+
+Examples:
+  # Preview estimated backup size in GB
+  lbackup backup -s ~/Documents --dry-run
+
+  # Backup a folder with a CLI password, extra excludes, and verbose file output
+  lbackup backup -s ~/Documents -o ~/backups -p "mysecret" -e "*.iso" -v
+
+  # Restore a backup
+  lbackup restore -i ~/backups/Documents_20261017_120000.tar.gz.gpg -o /tmp/restore -p "mysecret"
+EOF
+}
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+need_arg() {
+  [ $# -ge 2 ] && [ -n "$2" ] || die "Option '$1' requires an argument."
+}
+
+ask_password() {
+  local mode="${1:-}"
+  if [ -z "$password" ]; then
+    printf "Enter password: " >&2
+    if [ -t 0 ]; then
+      read -rs password
+      echo >&2
+      if [ "$mode" = "backup" ]; then
+        local confirm=""
+        printf "Confirm password: " >&2
+        read -rs confirm
+        echo >&2
+        [ "$password" = "$confirm" ] || die "Passwords do not match."
+      fi
+    else
+      read -r password || read -rs password </dev/tty
+      echo >&2
+    fi
+    [ -n "$password" ] || die "Password cannot be empty."
+  fi
+}
+
+cmd_backup() {
+  local src="$HOME"
+  local out="$HOME/backups"
+  local password=""
+  local use_defaults=1
+  local dry_run=0
+  local verbose=0
+  local cli_excludes=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -s|--source)   need_arg "$@"; src="$2"; shift 2 ;;
+      -o|--output)   need_arg "$@"; out="$2"; shift 2 ;;
+      -p|--password) need_arg "$@"; password="$2"; shift 2 ;;
+      -e|--exclude)  need_arg "$@"; cli_excludes+=("$2"); shift 2 ;;
+      --no-default-excludes) use_defaults=0; shift ;;
+      -n|--dry-run)  dry_run=1; shift ;;
+      -v|--verbose)  verbose=1; shift ;;
+      -h|--help)     usage; exit 0 ;;
+      *)             die "Unknown option: $1" ;;
+    esac
+  done
+
+  [ -d "$src" ] || die "Source directory '$src' does not exist."
+
+  local real_src
+  real_src="$(realpath "$src")"
+  local parent_dir
+  parent_dir="$(dirname "$real_src")"
+  local base_name
+  base_name="$(basename "$real_src")"
+  if [ "$real_src" = "/" ]; then
+    parent_dir="/"
+    base_name="."
+  fi
+
+  # Build tar exclude flags
+  local exclude_args=()
+  if [ "$use_defaults" -eq 1 ]; then
+    exclude_args+=(--exclude-caches-under)
+    for pat in "${DEFAULT_EXCLUDES[@]}"; do
+      exclude_args+=(--exclude="$pat")
+    done
+    if [ "$real_src" = "/" ]; then
+      exclude_args+=(--exclude="./proc" --exclude="./sys" --exclude="./dev" --exclude="./run")
+    fi
+  fi
+  for pat in "${cli_excludes[@]}"; do
+    exclude_args+=(--exclude="$pat")
+  done
+
+  # Exclude the output directory (or output file) if it resides inside the source directory
+  local real_out
+  real_out="$(realpath -m "$out")"
+  if [[ "$real_out" == "$real_src"/* ]]; then
+    exclude_args+=(--exclude="${base_name}/${real_out#"$real_src"/}")
+  fi
+
+  if [ "$dry_run" -eq 1 ]; then
+    local bytes
+    bytes="$(LC_ALL=C tar --totals --warning=no-file-changed --ignore-failed-read -cf /dev/null "${exclude_args[@]}" -C "$parent_dir" "$base_name" 2>&1 \
+      | awk '/^Total bytes written:/ {print $4}')"
+    bytes="${bytes:-0}"
+    awk -v b="$bytes" -v s="$real_src" 'BEGIN {
+      printf "Dry run for: %s\n", s
+      printf "Uncompressed size (after excludes): %.2f GB (%.2f MB / %d bytes)\n", b/1073741824, b/1048576, b
+      printf "Estimated compressed archive size:  ~%.2f GB - %.2f GB\n", (b*0.35)/1073741824, (b*0.65)/1073741824
+    }'
+    return 0
+  fi
+
+  ask_password backup
+
+  # Determine output archive filename
+  local archive_file=""
+  if [[ "$out" == *.gpg || "$out" == *.enc ]]; then
+    mkdir -p "$(dirname "$out")"
+    archive_file="$out"
+  else
+    mkdir -p "$out"
+    local prefix="$base_name"
+    [ "$prefix" = "." ] && prefix="root"
+    archive_file="${out%/}/${prefix}_$(date +%Y%m%d_%H%M%S).tar.gz.gpg"
+  fi
+
+  local progress_args=(--totals)
+  if [ "$verbose" -eq 1 ]; then
+    progress_args+=(-v)
+  elif [ -t 2 ]; then
+    progress_args+=(--checkpoint=2500 --checkpoint-action='ttyout=  Progress: %T\r')
+  fi
+
+  echo "Backing up '$real_src' -> '$archive_file'..."
+  umask 077
+  trap 'rm -f "$archive_file"' INT TERM EXIT
+  set +e
+  tar --warning=no-file-changed --ignore-failed-read "${progress_args[@]}" -czpf - "${exclude_args[@]}" -C "$parent_dir" "$base_name" \
+    | gpg --batch --yes --quiet --no-tty \
+          --pinentry-mode loopback --passphrase-fd 3 \
+          --symmetric --cipher-algo AES256 \
+          --output "$archive_file" 3<<<"$password"
+  local status=("${PIPESTATUS[@]}")
+  set -e
+  if [ "${status[0]}" -gt 1 ] || [ "${status[1]}" -ne 0 ]; then
+    die "Backup failed (tar=${status[0]}, gpg=${status[1]})."
+  fi
+  trap - INT TERM EXIT
+
+  echo "Backup complete: $archive_file"
+}
+
+cmd_restore() {
+  local archive=""
+  local dest="./restored"
+  local password=""
+  local verbose=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -i|--input)    need_arg "$@"; archive="$2"; shift 2 ;;
+      -o|--output)   need_arg "$@"; dest="$2"; shift 2 ;;
+      -p|--password) need_arg "$@"; password="$2"; shift 2 ;;
+      -v|--verbose)  verbose=1; shift ;;
+      -h|--help)     usage; exit 0 ;;
+      *)             die "Unknown option: $1" ;;
+    esac
+  done
+
+  [ -n "$archive" ] || die "Missing input archive (-i / --input)."
+  [ -f "$archive" ] || die "Archive '$archive' does not exist."
+  ask_password restore
+
+  local progress_args=()
+  if [ "$verbose" -eq 1 ]; then
+    progress_args+=(-v)
+  elif [ -t 2 ]; then
+    progress_args+=(--checkpoint=2500 --checkpoint-action='ttyout=  Extracting: %u\r')
+  fi
+
+  mkdir -p "$dest"
+  echo "Restoring '$archive' -> '$dest'..."
+
+  gpg --batch --yes --quiet --no-tty \
+      --pinentry-mode loopback --passphrase-fd 3 \
+      --decrypt "$archive" 3<<<"$password" \
+    | tar "${progress_args[@]}" -xzpf - -C "$dest"
+
+  echo "Restore complete: $dest"
+}
+
+# Main entrypoint
+case "${1:-}" in
+  backup)  shift; cmd_backup "$@" ;;
+  restore) shift; cmd_restore "$@" ;;
+  -h|--help|help|"") usage ;;
+  *) die "Unknown command: $1. Use 'lbackup --help'." ;;
+esac
