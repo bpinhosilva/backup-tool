@@ -9,6 +9,18 @@ Standard tools pre-installed on almost every Linux distribution:
 
 ## Installation
 
+### Option 1: Install with curl
+
+```bash
+mkdir -p ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/bpinhosilva/backup-tool/main/bin/lbackup -o ~/.local/bin/lbackup
+chmod +x ~/.local/bin/lbackup
+```
+
+Make sure `~/.local/bin` is in your `$PATH`.
+
+### Option 2: Install from a local clone
+
 Copy the script anywhere in your `$PATH` (or run `./bin/lbackup` directly):
 
 ```bash
