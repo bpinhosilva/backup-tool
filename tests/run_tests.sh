@@ -8,6 +8,8 @@ LBACKUP="${SCRIPT_DIR}/../bin/lbackup"
 BASE_TMP="${TMPDIR:-/tmp}"
 [ -w "$BASE_TMP" ] || BASE_TMP="$SCRIPT_DIR"
 TMP_ROOT="$(mktemp -d "${BASE_TMP}/lbackup_test.XXXXXX")"
+export HOME="${TMP_ROOT}/home"   # isolate from the real ~/.config/lbackup
+mkdir -p "$HOME"
 export GNUPGHOME="${TMP_ROOT}/gnupg"
 mkdir -m 700 "$GNUPGHOME"
 
@@ -101,5 +103,77 @@ pass "Password prompt (when -p omitted) verified"
 DRY_OUT="$("$LBACKUP" backup -s "$SRC" --dry-run)"
 echo "$DRY_OUT" | grep -q "GB" || fail "--dry-run did not output size in GB"
 pass "Dry run (--dry-run) size estimation in GB verified"
+
+# 12. Exclude file tests
+CFG_DIR="$HOME/.config/lbackup"
+EX_DEFAULT="$CFG_DIR/excludes"
+ex_restore() { # usage: ex_restore NAME [extra backup args...]; restores into $TMP_ROOT/ex_NAME
+  local name="$1"; shift
+  "$LBACKUP" backup -s "$SRC" -o "${TMP_ROOT}/ex_${name}.tar.gz.gpg" -p "testpass123" "$@" 2>"${TMP_ROOT}/ex_${name}.err"
+  "$LBACKUP" restore -i "${TMP_ROOT}/ex_${name}.tar.gz.gpg" -o "${TMP_ROOT}/ex_${name}" -p "testpass123"
+}
+mkdir -p "$CFG_DIR"
+
+# 12a. No exclude file -> defaults apply, no warning
+[ ! -e "$EX_DEFAULT" ] || fail "test setup: excludes file should not exist yet"
+ex_restore none
+[ ! -e "${TMP_ROOT}/ex_none/data/.cache" ] && [ -f "${TMP_ROOT}/ex_none/data/file.txt" ] || fail "defaults not applied without exclude file"
+! grep -q "Warning" "${TMP_ROOT}/ex_none.err" || fail "no warning expected without exclude file"
+pass "Missing exclude file falls back to default excludes"
+
+# 12b. -E from another directory; comments, blank lines, CRLF, padding, spaces in path
+CUSTOM="${TMP_ROOT}/my excludes"
+printf '# my excludes\n\nignore_dir\r\n  *.log  \n' > "$CUSTOM"
+(cd / && ex_restore custom --exclude-file "$CUSTOM")
+[ ! -e "${TMP_ROOT}/ex_custom/data/ignore_dir" ] || fail "ignore_dir not excluded via exclude file"
+[ ! -e "${TMP_ROOT}/ex_custom/data/app.log" ] || fail "*.log not excluded via exclude file"
+[ -d "${TMP_ROOT}/ex_custom/data/.cache" ] || fail "exclude file should replace defaults (.cache expected)"
+! grep -q "Warning" "${TMP_ROOT}/ex_custom.err" || fail "unexpected warning for valid exclude file"
+pass "--exclude-file reads one pattern per line from any path"
+
+# 12c. Default location ~/.config/lbackup/excludes is picked up automatically
+printf 'sub\n' > "$EX_DEFAULT"
+ex_restore home
+[ ! -e "${TMP_ROOT}/ex_home/data/sub" ] || fail "default-location exclude file not applied"
+[ -d "${TMP_ROOT}/ex_home/data/.cache" ] || fail "exclude file should replace defaults"
+pass "~/.config/lbackup/excludes is used automatically"
+
+# 12d. CLI -e adds on top of the exclude file
+ex_restore additive -e "ignore_dir"
+[ ! -e "${TMP_ROOT}/ex_additive/data/sub" ] && [ ! -e "${TMP_ROOT}/ex_additive/data/ignore_dir" ] || fail "-e should add to exclude file patterns"
+pass "CLI -e is additive to the exclude file"
+
+# 12e. Exclude file without patterns (empty / comments only) -> warning, no exclusions
+printf '# only comments\n\n' > "$EX_DEFAULT"
+ex_restore empty
+grep -q "no exclusions have been used" "${TMP_ROOT}/ex_empty.err" || fail "pattern-less exclude file should warn"
+grep -q "CACHEDIR.TAG are still skipped" "${TMP_ROOT}/ex_empty.err" || fail "warning should mention CACHEDIR.TAG"
+[ -d "${TMP_ROOT}/ex_empty/data/.cache" ] && [ -f "${TMP_ROOT}/ex_empty/data/test.tmp" ] || fail "pattern-less exclude file should exclude nothing"
+: > "$EX_DEFAULT"
+ex_restore zero
+grep -q "no exclusions have been used" "${TMP_ROOT}/ex_zero.err" || fail "zero-byte exclude file should warn"
+pass "Empty exclude file warns and uses no exclusions"
+
+# 12f. --no-default-excludes keeps exclude-file patterns; without a file excludes nothing built-in
+printf 'sub\n' > "$EX_DEFAULT"
+ex_restore nodef --no-default-excludes
+[ ! -e "${TMP_ROOT}/ex_nodef/data/sub" ] || fail "exclude file should still apply with --no-default-excludes"
+rm -f "$EX_DEFAULT"
+ex_restore nodef2 --no-default-excludes
+[ -d "${TMP_ROOT}/ex_nodef2/data/.cache" ] || fail "built-in defaults should be disabled"
+pass "--no-default-excludes only disables built-in defaults"
+
+# 12g. --no-exclude-file ignores the exclude file
+printf 'sub\n' > "$EX_DEFAULT"
+ex_restore noex --no-exclude-file
+[ -d "${TMP_ROOT}/ex_noex/data/sub" ] && [ ! -e "${TMP_ROOT}/ex_noex/data/.cache" ] || fail "--no-exclude-file should use built-in defaults only"
+pass "--no-exclude-file ignores the exclude file"
+
+# 12h. Explicit --exclude-file pointing to a missing file is an error
+if "$LBACKUP" backup -s "$SRC" --dry-run --exclude-file "${TMP_ROOT}/nope" >/dev/null 2>&1; then
+  fail "Missing explicit exclude file should fail"
+fi
+pass "Missing explicit exclude file rejected"
+rm -f "$EX_DEFAULT"
 
 echo "All tests passed!"

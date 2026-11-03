@@ -55,7 +55,44 @@ By default, `lbackup` automatically ignores common cache, temp, and virtual fold
   lbackup backup -s ~/Documents -o ~/backups -p "mySecretPassword" --no-default-excludes
   ```
 
-### 3. Restore a Backup
+### 3. Exclude File (optional)
+
+You can keep your exclusions in a file instead of repeating `-e` flags. The file is **optional**: `lbackup` looks for `~/.config/lbackup/excludes` and silently uses the built-in defaults if it doesn't exist. To use a file from anywhere else, pass `-E` / `--exclude-file`:
+
+```bash
+mkdir -p ~/.config/lbackup
+cp examples/excludes ~/.config/lbackup/excludes
+
+lbackup backup --exclude-file /path/to/my-excludes -p "mySecretPassword"
+```
+
+The file has **one pattern per line** (tar `--exclude` syntax); blank lines and lines starting with `#` are ignored:
+
+```text
+# ~/.config/lbackup/excludes
+.cache
+node_modules
+Downloads
+*.iso
+VirtualBox VMs
+```
+
+A sample is provided in [`examples/excludes`](examples/excludes).
+
+| Situation | Result |
+|-----------|--------|
+| No exclude file | Built-in default excludes are used |
+| Exclude file with patterns | Those patterns **replace** the built-in defaults |
+| Exclude file exists but has no patterns | No exclusions are used, and a warning is printed |
+| `--exclude-file` points to a missing file | Error |
+
+Notes:
+- `-e` patterns are always added on top.
+- `--no-default-excludes` disables only the built-in defaults; exclude-file and `-e` patterns still apply.
+- `--no-exclude-file` ignores the exclude file entirely.
+- Directories containing a `CACHEDIR.TAG` file are skipped whenever built-in defaults are enabled, even if the exclude file is empty or custom.
+
+### 4. Restore a Backup
 
 Pass the encrypted archive (`-i`), the target directory (`-o`), and the password (`-p`), with optional `-v` for verbose file listing:
 
@@ -63,7 +100,7 @@ Pass the encrypted archive (`-i`), the target directory (`-o`), and the password
 lbackup restore -i ~/backups/user_20261017_153000.tar.gz.gpg -o /tmp/restored -p "mySecretPassword" -v
 ```
 
-### 4. Manual Decryption (Without `lbackup`)
+### 5. Manual Decryption (Without `lbackup`)
 
 Archives are standard `gpg` + `tar.gz` files, so you can always restore them manually on any Linux machine:
 

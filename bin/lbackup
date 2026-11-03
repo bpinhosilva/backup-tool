@@ -26,10 +26,37 @@ DEFAULT_EXCLUDES=(
   "lost+found"
 )
 
+# ==============================================================================
+# EXCLUDE FILE (optional): $HOME/.config/lbackup/excludes or -E / --exclude-file FILE
+# One pattern per line; blank lines and lines starting with '#' are ignored.
+# ==============================================================================
+EXCLUDE_FILE_PATTERNS=()
+
+trim() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
+# Read a one-pattern-per-line exclude file into EXCLUDE_FILE_PATTERNS
+load_exclude_file() {
+  local file="$1" line
+  [ -r "$file" ] || die "Exclude file '$file' is not readable."
+  EXCLUDE_FILE_PATTERNS=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="$(trim "$line")"
+    [ -z "$line" ] && continue
+    [[ "$line" == \#* ]] && continue
+    EXCLUDE_FILE_PATTERNS+=("$line")
+  done < "$file"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
-  lbackup backup  [-s SOURCE_DIR] [-o OUTPUT_PATH] [-p PASSWORD] [-e PATTERN ...] [--no-default-excludes] [--dry-run] [-v]
+  lbackup backup  [-s SOURCE_DIR] [-o OUTPUT_PATH] [-p PASSWORD] [-e PATTERN ...] [--no-default-excludes] [-E FILE] [--no-exclude-file] [--dry-run] [-v]
   lbackup restore -i ARCHIVE_FILE [-o RESTORE_DIR] [-p PASSWORD] [-v]
 
 Commands:
@@ -41,7 +68,9 @@ Backup Options:
   -o, --output PATH         Output directory or .tar.gz.gpg file path (default: $HOME/backups)
   -p, --password PASS       Encryption password (prompts interactively if omitted)
   -e, --exclude PATTERN     Exclude directory/file pattern (can be used multiple times)
-      --no-default-excludes Do not use the default cache/temp exclude list
+      --no-default-excludes Do not use the built-in default excludes (exclude file and -e patterns still apply)
+  -E, --exclude-file FILE   File with one exclude pattern per line (default: $HOME/.config/lbackup/excludes, optional)
+      --no-exclude-file     Ignore the exclude file entirely
   -n, --dry-run             Show estimated backup size in GB (after excludes) without backing up
   -v, --verbose             Print each file path as it is backed up
 
@@ -102,6 +131,8 @@ cmd_backup() {
   local dry_run=0
   local verbose=0
   local cli_excludes=()
+  local exclude_file=""
+  local use_exclude_file=1
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -110,6 +141,8 @@ cmd_backup() {
       -p|--password) need_arg "$@"; password="$2"; shift 2 ;;
       -e|--exclude)  need_arg "$@"; cli_excludes+=("$2"); shift 2 ;;
       --no-default-excludes) use_defaults=0; shift ;;
+      --no-exclude-file) use_exclude_file=0; shift ;;
+      -E|--exclude-file) need_arg "$@"; exclude_file="$2"; shift 2 ;;
       -n|--dry-run)  dry_run=1; shift ;;
       -v|--verbose)  verbose=1; shift ;;
       -h|--help)     usage; exit 0 ;;
@@ -130,13 +163,41 @@ cmd_backup() {
     base_name="."
   fi
 
+  # Resolve exclude file: explicit -E must exist; default path is optional; --no-exclude-file skips it
+  local exclude_file_set=0
+  if [ "$use_exclude_file" -eq 1 ]; then
+    if [ -n "$exclude_file" ]; then
+      [ -f "$exclude_file" ] || die "Exclude file '$exclude_file' does not exist."
+    elif [ -f "$HOME/.config/lbackup/excludes" ]; then
+      exclude_file="$HOME/.config/lbackup/excludes"
+    fi
+    if [ -n "$exclude_file" ]; then
+      load_exclude_file "$exclude_file"
+      exclude_file_set=1
+    fi
+  fi
+
+  # Base list: exclude file patterns replace the built-in defaults when a file is used.
+  # --no-default-excludes only disables built-in defaults, never exclude-file/-e patterns.
+  local base_excludes=()
+  if [ "$exclude_file_set" -eq 1 ]; then
+    base_excludes=("${EXCLUDE_FILE_PATTERNS[@]}")
+    if [ "${#base_excludes[@]}" -eq 0 ]; then
+      local note=""
+      [ "$use_defaults" -eq 1 ] && note=" (directories containing CACHEDIR.TAG are still skipped)"
+      echo "Warning: exclude file '$exclude_file' has no patterns; no exclusions have been used${note}." >&2
+    fi
+  elif [ "$use_defaults" -eq 1 ]; then
+    base_excludes=("${DEFAULT_EXCLUDES[@]}")
+  fi
+
   # Build tar exclude flags
   local exclude_args=()
+  for pat in "${base_excludes[@]}"; do
+    exclude_args+=(--exclude="$pat")
+  done
   if [ "$use_defaults" -eq 1 ]; then
     exclude_args+=(--exclude-caches-under)
-    for pat in "${DEFAULT_EXCLUDES[@]}"; do
-      exclude_args+=(--exclude="$pat")
-    done
     if [ "$real_src" = "/" ]; then
       exclude_args+=(--exclude="./proc" --exclude="./sys" --exclude="./dev" --exclude="./run")
     fi
