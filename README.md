@@ -1,4 +1,4 @@
-# chest
+# 🔐 chest
 
 A simple, single-file Bash script to archive (`tar.gz`), encrypt (`AES-256` via `gpg`), and restore directories on Linux.
 
