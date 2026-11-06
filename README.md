@@ -13,7 +13,7 @@ Standard tools pre-installed on almost every Linux distribution:
 
 ```bash
 mkdir -p ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/bpinhosilva/backup-tool/main/bin/chest -o ~/.local/bin/chest
+curl -fsSL https://raw.githubusercontent.com/bpinhosilva/chest/main/bin/chest -o ~/.local/bin/chest
 chmod +x ~/.local/bin/chest
 ```
 
