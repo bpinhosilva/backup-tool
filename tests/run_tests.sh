@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Simple test suite for lbackup
+# Simple test suite for chest
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LBACKUP="${SCRIPT_DIR}/../bin/lbackup"
+CHEST="${SCRIPT_DIR}/../bin/chest"
 
 BASE_TMP="${TMPDIR:-/tmp}"
 [ -w "$BASE_TMP" ] || BASE_TMP="$SCRIPT_DIR"
-TMP_ROOT="$(mktemp -d "${BASE_TMP}/lbackup_test.XXXXXX")"
-export HOME="${TMP_ROOT}/home"   # isolate from the real ~/.config/lbackup
+TMP_ROOT="$(mktemp -d "${BASE_TMP}/chest_test.XXXXXX")"
+export HOME="${TMP_ROOT}/home"   # isolate from the real ~/.config/chest
 mkdir -p "$HOME"
 export GNUPGHOME="${TMP_ROOT}/gnupg"
 mkdir -m 700 "$GNUPGHOME"
@@ -23,7 +23,7 @@ pass() { echo "[PASS] $*"; }
 fail() { echo "[FAIL] $*" >&2; exit 1; }
 
 # 1. Syntax check
-bash -n "$LBACKUP" && pass "Syntax check passed"
+bash -n "$CHEST" && pass "Syntax check passed"
 
 # 2. Prepare test files
 SRC="${TMP_ROOT}/data"
@@ -42,13 +42,13 @@ echo "custom ignored" > "$SRC/ignore_dir/skip.txt"
 echo "log file" > "$SRC/app.log"
 
 # 3. Backup with CLI password and custom -e excludes
-"$LBACKUP" backup -s "$SRC" -o "$OUT" -p "testpass123" -e "ignore_dir" -e "*.log"
+"$CHEST" backup -s "$SRC" -o "$OUT" -p "testpass123" -e "ignore_dir" -e "*.log"
 archives=("$OUT"/data_*.tar.gz.gpg)
 ARCHIVE="${archives[0]}"
 [ -f "$ARCHIVE" ] && pass "Backup archive created: $(basename "$ARCHIVE")"
 
 # 4. Restore with CLI password
-"$LBACKUP" restore -i "$ARCHIVE" -o "$RESTORE" -p "testpass123"
+"$CHEST" restore -i "$ARCHIVE" -o "$RESTORE" -p "testpass123"
 
 # 5. Verify included files
 [ "$(cat "$RESTORE/data/file.txt")" = "hello world" ] || fail "file.txt mismatch"
@@ -68,25 +68,25 @@ pass "Default and CLI exclusions verified"
 # 7. Verify --no-default-excludes keeps cache/temp
 ARCHIVE_ALL="${OUT}/all.tar.gz.gpg"
 RESTORE_ALL="${TMP_ROOT}/restored_all"
-"$LBACKUP" backup -s "$SRC" -o "$ARCHIVE_ALL" -p "testpass123" --no-default-excludes
-"$LBACKUP" restore -i "$ARCHIVE_ALL" -o "$RESTORE_ALL" -p "testpass123"
+"$CHEST" backup -s "$SRC" -o "$ARCHIVE_ALL" -p "testpass123" --no-default-excludes
+"$CHEST" restore -i "$ARCHIVE_ALL" -o "$RESTORE_ALL" -p "testpass123"
 [ -f "$RESTORE_ALL/data/.cache/junk" ] && [ -f "$RESTORE_ALL/data/test.tmp" ] || fail "--no-default-excludes failed"
 pass "--no-default-excludes verified"
 
 # 8. Verify output archive inside source directory excludes only the archive itself
 ARCHIVE_INSIDE="$SRC/sub/inside.tar.gz.gpg"
 RESTORE_INSIDE="${TMP_ROOT}/restored_inside"
-"$LBACKUP" backup -s "$SRC" -o "$ARCHIVE_INSIDE" -p "testpass123"
-"$LBACKUP" restore -i "$ARCHIVE_INSIDE" -o "$RESTORE_INSIDE" -p "testpass123"
+"$CHEST" backup -s "$SRC" -o "$ARCHIVE_INSIDE" -p "testpass123"
+"$CHEST" restore -i "$ARCHIVE_INSIDE" -o "$RESTORE_INSIDE" -p "testpass123"
 [ "$(cat "$RESTORE_INSIDE/data/sub/notes.txt")" = "nested file" ] || fail "Sibling file in sub/ should be preserved"
 [ ! -e "$RESTORE_INSIDE/data/sub/inside.tar.gz.gpg" ] || fail "Output archive inside source should be excluded"
 pass "Output archive inside source directory handled properly"
 
 # 9. Verify wrong password & missing argument handling
-if "$LBACKUP" restore -i "$ARCHIVE" -o "${TMP_ROOT}/bad" -p "wrongpass" >/dev/null 2>&1; then
+if "$CHEST" restore -i "$ARCHIVE" -o "${TMP_ROOT}/bad" -p "wrongpass" >/dev/null 2>&1; then
   fail "Restore with wrong password should fail"
 fi
-if "$LBACKUP" backup -s >/dev/null 2>&1; then
+if "$CHEST" backup -s >/dev/null 2>&1; then
   fail "Missing option argument should fail"
 fi
 pass "Wrong password and missing option arguments rejected as expected"
@@ -94,23 +94,23 @@ pass "Wrong password and missing option arguments rejected as expected"
 # 10. Verify prompting for password when -p is omitted
 ARCHIVE_PROMPT="${OUT}/prompted.tar.gz.gpg"
 RESTORE_PROMPT="${TMP_ROOT}/restored_prompt"
-echo "promptedpass" | "$LBACKUP" backup -s "$SRC" -o "$ARCHIVE_PROMPT"
-echo "promptedpass" | "$LBACKUP" restore -i "$ARCHIVE_PROMPT" -o "$RESTORE_PROMPT"
+echo "promptedpass" | "$CHEST" backup -s "$SRC" -o "$ARCHIVE_PROMPT"
+echo "promptedpass" | "$CHEST" restore -i "$ARCHIVE_PROMPT" -o "$RESTORE_PROMPT"
 [ "$(cat "$RESTORE_PROMPT/data/file.txt")" = "hello world" ] || fail "Prompted password backup/restore failed"
 pass "Password prompt (when -p omitted) verified"
 
 # 11. Verify --dry-run estimates size in GB without prompting for password
-DRY_OUT="$("$LBACKUP" backup -s "$SRC" --dry-run)"
+DRY_OUT="$("$CHEST" backup -s "$SRC" --dry-run)"
 echo "$DRY_OUT" | grep -q "GB" || fail "--dry-run did not output size in GB"
 pass "Dry run (--dry-run) size estimation in GB verified"
 
 # 12. Exclude file tests
-CFG_DIR="$HOME/.config/lbackup"
+CFG_DIR="$HOME/.config/chest"
 EX_DEFAULT="$CFG_DIR/excludes"
 ex_restore() { # usage: ex_restore NAME [extra backup args...]; restores into $TMP_ROOT/ex_NAME
   local name="$1"; shift
-  "$LBACKUP" backup -s "$SRC" -o "${TMP_ROOT}/ex_${name}.tar.gz.gpg" -p "testpass123" "$@" 2>"${TMP_ROOT}/ex_${name}.err"
-  "$LBACKUP" restore -i "${TMP_ROOT}/ex_${name}.tar.gz.gpg" -o "${TMP_ROOT}/ex_${name}" -p "testpass123"
+  "$CHEST" backup -s "$SRC" -o "${TMP_ROOT}/ex_${name}.tar.gz.gpg" -p "testpass123" "$@" 2>"${TMP_ROOT}/ex_${name}.err"
+  "$CHEST" restore -i "${TMP_ROOT}/ex_${name}.tar.gz.gpg" -o "${TMP_ROOT}/ex_${name}" -p "testpass123"
 }
 mkdir -p "$CFG_DIR"
 
@@ -131,12 +131,12 @@ printf '# my excludes\n\nignore_dir\r\n  *.log  \n' > "$CUSTOM"
 ! grep -q "Warning" "${TMP_ROOT}/ex_custom.err" || fail "unexpected warning for valid exclude file"
 pass "--exclude-file reads one pattern per line from any path"
 
-# 12c. Default location ~/.config/lbackup/excludes is picked up automatically
+# 12c. Default location ~/.config/chest/excludes is picked up automatically
 printf 'sub\n' > "$EX_DEFAULT"
 ex_restore home
 [ ! -e "${TMP_ROOT}/ex_home/data/sub" ] || fail "default-location exclude file not applied"
 [ -d "${TMP_ROOT}/ex_home/data/.cache" ] || fail "exclude file should replace defaults"
-pass "~/.config/lbackup/excludes is used automatically"
+pass "~/.config/chest/excludes is used automatically"
 
 # 12d. CLI -e adds on top of the exclude file
 ex_restore additive -e "ignore_dir"
@@ -170,7 +170,7 @@ ex_restore noex --no-exclude-file
 pass "--no-exclude-file ignores the exclude file"
 
 # 12h. Explicit --exclude-file pointing to a missing file is an error
-if "$LBACKUP" backup -s "$SRC" --dry-run --exclude-file "${TMP_ROOT}/nope" >/dev/null 2>&1; then
+if "$CHEST" backup -s "$SRC" --dry-run --exclude-file "${TMP_ROOT}/nope" >/dev/null 2>&1; then
   fail "Missing explicit exclude file should fail"
 fi
 pass "Missing explicit exclude file rejected"

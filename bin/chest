@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lbackup - Simple archive, encrypt, and restore script for Linux
+# chest - Simple archive, encrypt, and restore script for Linux
 set -euo pipefail
 
 # ==============================================================================
@@ -27,7 +27,7 @@ DEFAULT_EXCLUDES=(
 )
 
 # ==============================================================================
-# EXCLUDE FILE (optional): $HOME/.config/lbackup/excludes or -E / --exclude-file FILE
+# EXCLUDE FILE (optional): $HOME/.config/chest/excludes or -E / --exclude-file FILE
 # One pattern per line; blank lines and lines starting with '#' are ignored.
 # ==============================================================================
 EXCLUDE_FILE_PATTERNS=()
@@ -56,8 +56,8 @@ load_exclude_file() {
 usage() {
   cat <<'EOF'
 Usage:
-  lbackup backup  [-s SOURCE_DIR] [-o OUTPUT_PATH] [-p PASSWORD] [-e PATTERN ...] [--no-default-excludes] [-E FILE] [--no-exclude-file] [--dry-run] [-v]
-  lbackup restore -i ARCHIVE_FILE [-o RESTORE_DIR] [-p PASSWORD] [-v]
+  chest backup  [-s SOURCE_DIR] [-o OUTPUT_PATH] [-p PASSWORD] [-e PATTERN ...] [--no-default-excludes] [-E FILE] [--no-exclude-file] [--dry-run] [-v]
+  chest restore -i ARCHIVE_FILE [-o RESTORE_DIR] [-p PASSWORD] [-v]
 
 Commands:
   backup    Archive, compress (tar.gz), and encrypt (AES-256) a directory
@@ -69,7 +69,7 @@ Backup Options:
   -p, --password PASS       Encryption password (prompts interactively if omitted)
   -e, --exclude PATTERN     Exclude directory/file pattern (can be used multiple times)
       --no-default-excludes Do not use the built-in default excludes (exclude file and -e patterns still apply)
-  -E, --exclude-file FILE   File with one exclude pattern per line (default: $HOME/.config/lbackup/excludes, optional)
+  -E, --exclude-file FILE   File with one exclude pattern per line (default: $HOME/.config/chest/excludes, optional)
       --no-exclude-file     Ignore the exclude file entirely
   -n, --dry-run             Show estimated backup size in GB (after excludes) without backing up
   -v, --verbose             Print each file path as it is backed up
@@ -82,13 +82,13 @@ Restore Options:
 
 Examples:
   # Preview estimated backup size in GB
-  lbackup backup -s ~/Documents --dry-run
+  chest backup -s ~/Documents --dry-run
 
   # Backup a folder with a CLI password, extra excludes, and verbose file output
-  lbackup backup -s ~/Documents -o ~/backups -p "mysecret" -e "*.iso" -v
+  chest backup -s ~/Documents -o ~/backups -p "mysecret" -e "*.iso" -v
 
   # Restore a backup
-  lbackup restore -i ~/backups/Documents_20261017_120000.tar.gz.gpg -o /tmp/restore -p "mysecret"
+  chest restore -i ~/backups/Documents_20261017_120000.tar.gz.gpg -o /tmp/restore -p "mysecret"
 EOF
 }
 
@@ -168,8 +168,8 @@ cmd_backup() {
   if [ "$use_exclude_file" -eq 1 ]; then
     if [ -n "$exclude_file" ]; then
       [ -f "$exclude_file" ] || die "Exclude file '$exclude_file' does not exist."
-    elif [ -f "$HOME/.config/lbackup/excludes" ]; then
-      exclude_file="$HOME/.config/lbackup/excludes"
+    elif [ -f "$HOME/.config/chest/excludes" ]; then
+      exclude_file="$HOME/.config/chest/excludes"
     fi
     if [ -n "$exclude_file" ]; then
       load_exclude_file "$exclude_file"
@@ -310,5 +310,5 @@ case "${1:-}" in
   backup)  shift; cmd_backup "$@" ;;
   restore) shift; cmd_restore "$@" ;;
   -h|--help|help|"") usage ;;
-  *) die "Unknown command: $1. Use 'lbackup --help'." ;;
+  *) die "Unknown command: $1. Use 'chest --help'." ;;
 esac
