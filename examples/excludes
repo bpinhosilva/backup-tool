@@ -1,9 +1,9 @@
-# lbackup sample exclude list: one pattern per line.
+# chest sample exclude list: one pattern per line.
 # Blank lines and lines starting with '#' are ignored.
 # Patterns use tar --exclude syntax (wildcards allowed).
 #
-# Copy to ~/.config/lbackup/excludes (picked up automatically), or pass it with:
-#   lbackup backup --exclude-file /path/to/excludes
+# Copy to ~/.config/chest/excludes (picked up automatically), or pass it with:
+#   chest backup --exclude-file /path/to/excludes
 #
 # - No file                 -> built-in default excludes are used
 # - File with patterns      -> these patterns REPLACE the built-in defaults
